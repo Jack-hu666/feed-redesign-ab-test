@@ -164,8 +164,8 @@ def main():
     t_b = sess[sess["grp"] == "treatment"]["bounced"]
     proportion_test(len(t_b), t_b.sum(), len(c_b), c_b.sum(), "跳出率")
 
-    # 护栏指标：加载失败率（事件级计数，护栏要求「不变差」）
-    print("\n--- 护栏指标：加载失败率（卡方检验，要求不变差）---")
+    # 护栏指标：加载失败率（事件级计数）。护栏只关心「是否变差」，做单侧检验。
+    print("\n--- 护栏指标：加载失败率（要求不变差，单侧检验）---")
     con = sqlite3.connect(DB_PATH)
     lf = pd.read_sql_query(
         """SELECT u."group",
@@ -176,9 +176,19 @@ def main():
            GROUP BY u."group\"""", con)
     con.close()
     lf = lf.set_index("group")
-    proportion_test(int(lf.loc["treatment", "expose_cnt"]), int(lf.loc["treatment", "fail_cnt"]),
-                    int(lf.loc["control", "expose_cnt"]), int(lf.loc["control", "fail_cnt"]),
-                    "加载失败率")
+    p_t = lf.loc["treatment", "fail_cnt"] / lf.loc["treatment", "expose_cnt"]
+    p_c = lf.loc["control", "fail_cnt"] / lf.loc["control", "expose_cnt"]
+    p_pool = (lf["fail_cnt"].sum()) / (lf["expose_cnt"].sum())
+    se = np.sqrt(p_pool * (1 - p_pool) * (1 / lf.loc["treatment", "expose_cnt"] +
+                                          1 / lf.loc["control", "expose_cnt"]))
+    z = (p_t - p_c) / se
+    p_worse = 1 - stats.norm.cdf(z)  # 单侧：treatment 是否显著「更高」（更差）
+    print(f"  treatment={p_t:.4%} vs control={p_c:.4%}，差={p_t - p_c:+.4%}")
+    print(f"  单侧 p（treatment 更差）={p_worse:.4f}")
+    if p_t > p_c and p_worse < 0.05:
+        print("  -> 护栏告警：加载失败率显著变差，需暂停实验排查！")
+    else:
+        print("  -> 护栏通过：加载失败率未变差")
 
     print("\n结论：根据上述 p 值判断各指标是否显著，再综合护栏指标做上线/灰度/放弃决策。")
 
